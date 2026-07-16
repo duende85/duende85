@@ -274,3 +274,109 @@ with right:
     <div class="kpi" style="max-width:260px"><div class="v">{sw(a)}{sw(b)}{p:.1%}</div>
     <div class="l">{label}</div></div>
     """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------- multi-turn projections
+st.markdown('<div class="sec" style="margin-top:14px">Multi-turn projections · n stones in m turns '
+            '(3 tokens refill the market each turn)</div>', unsafe_allow_html=True)
+
+MAX_TURNS = 8
+MAX_N = 6
+
+def p_exact_multi(K, n, m_turns):
+    """P(exactly n of a color among the 3*m tokens drawn from the bag)."""
+    sample = min(DRAW * m_turns, N)
+    if n > K or n > sample or sample - n > N - K:
+        return 0.0
+    return comb(K, n) * comb(N - K, sample - n) / comb(N, sample)
+
+def p_atleast_multi(K, n, m_turns):
+    sample = min(DRAW * m_turns, N)
+    return sum(p_exact_multi(K, x, m_turns) for x in range(n, min(K, sample) + 1))
+
+def p_joint_exact(Ka, Kb, na, nb, m_turns):
+    """P(exactly na of A and nb of B among 3*m drawn tokens), A != B."""
+    sample = min(DRAW * m_turns, N)
+    rest = N - Ka - Kb
+    need = sample - na - nb
+    if na > Ka or nb > Kb or need < 0 or need > rest:
+        return 0.0
+    return comb(Ka, na) * comb(Kb, nb) * comb(rest, need) / comb(N, sample)
+
+def p_joint_atleast(Ka, Kb, na, nb, m_turns):
+    sample = min(DRAW * m_turns, N)
+    tot = 0.0
+    for xa in range(na, min(Ka, sample) + 1):
+        for xb in range(nb, min(Kb, sample - xa) + 1):
+            tot += p_joint_exact(Ka, Kb, xa, xb, m_turns)
+    return tot
+
+def heat(p, cap=1.0):
+    """Blue heat shade for a probability cell."""
+    t = min(p / cap, 1.0) if cap > 0 else 0.0
+    shade = int(255 - t * 95)
+    return f"background:rgb({shade},{shade + int((255 - shade) * 0.4)},255)"
+
+def color_turn_table(color, mode):
+    K = remaining[color]
+    n_hi = min(MAX_N, K)
+    head = ("<tr><th>n \\ turns</th>"
+            + "".join(f"<th style='text-align:right'>{m}</th>" for m in range(1, MAX_TURNS + 1))
+            + "</tr>")
+    body = []
+    for n in range(0, n_hi + 1):
+        cells = [f"<td><b>{'≥' if mode == 'at least' else '='}{n}</b></td>"]
+        for m in range(1, MAX_TURNS + 1):
+            p = p_atleast_multi(K, n, m) if mode == "at least" else p_exact_multi(K, n, m)
+            cells.append(f"<td class='num' style='{heat(p)}'>{p:.0%}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    return "<table class='dense'>" + head + "".join(body) + "</table>"
+
+mode = st.radio("Mode", ["at least", "exactly"], horizontal=True,
+                label_visibility="collapsed", key="mt_mode")
+
+ta, tb = st.columns(2, gap="medium")
+with ta:
+    ca = st.selectbox("Color A", COLORS, index=0, key="mt_a")
+    st.markdown(f'<div class="dash-sub">{sw(ca)}<b>{ca}</b> — {remaining[ca]} in bag</div>',
+                unsafe_allow_html=True)
+    st.markdown(color_turn_table(ca, mode), unsafe_allow_html=True)
+with tb:
+    cb = st.selectbox("Color B", COLORS, index=5, key="mt_b")
+    st.markdown(f'<div class="dash-sub">{sw(cb)}<b>{cb}</b> — {remaining[cb]} in bag</div>',
+                unsafe_allow_html=True)
+    st.markdown(color_turn_table(cb, mode), unsafe_allow_html=True)
+
+st.markdown('<div class="dash-sub">Counts tokens <b>arriving to the market</b> from the bag — '
+            'not tokens you personally get to take. Turns beyond the bag size are capped at '
+            'drawing the whole bag.</div>', unsafe_allow_html=True)
+
+# ---- joint table
+st.markdown(f'<div class="sec" style="margin-top:10px">Joint probability · '
+            f'{sw(ca)}{ca} × {sw(cb)}{cb}</div>', unsafe_allow_html=True)
+
+if ca == cb:
+    st.warning("Pick two different colors above to see their joint table.")
+else:
+    jc1, jc2 = st.columns([1, 4])
+    with jc1:
+        m_sel = st.selectbox("Turns", list(range(1, MAX_TURNS + 1)), index=2, key="mt_m")
+    Ka, Kb = remaining[ca], remaining[cb]
+    na_hi = min(MAX_N, Ka)
+    nb_hi = min(MAX_N, Kb)
+    pre = "≥" if mode == "at least" else "="
+    fn = p_joint_atleast if mode == "at least" else p_joint_exact
+    head = (f"<tr><th>{sw(cb)}{cb[:3]} \\ {sw(ca)}{ca[:3]}</th>"
+            + "".join(f"<th style='text-align:right'>{pre}{na}</th>" for na in range(0, na_hi + 1))
+            + "</tr>")
+    body = []
+    for nb in range(0, nb_hi + 1):
+        cells = [f"<td><b>{pre}{nb}</b></td>"]
+        for na in range(0, na_hi + 1):
+            p = fn(Ka, Kb, na, nb, m_sel)
+            cells.append(f"<td class='num' style='{heat(p)}'>{p:.0%}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown("<table class='dense'>" + head + "".join(body) + "</table>",
+                unsafe_allow_html=True)
+    st.markdown(f'<div class="dash-sub">Cell = P({pre}col of {ca} AND {pre}row of {cb}) '
+                f'within {m_sel} turn{"s" if m_sel > 1 else ""} ({min(DRAW * m_sel, N)} tokens drawn). '
+                'Columns: ' + ca + ' · Rows: ' + cb + '.</div>', unsafe_allow_html=True)
