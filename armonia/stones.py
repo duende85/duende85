@@ -264,16 +264,28 @@ with right:
             st.markdown("<table class='dense'>" + "".join(rows) + "</table>",
                         unsafe_allow_html=True)
 
-    st.markdown('<div class="sec">Pair check</div>', unsafe_allow_html=True)
-    pc1, pc2 = st.columns(2)
-    a = pc1.selectbox("Color A", COLORS, index=0, label_visibility="collapsed")
-    b = pc2.selectbox("Color B", COLORS, index=5, label_visibility="collapsed")
-    p = pair_p[(a, b)]
-    label = f"P(≥2 {a})" if a == b else f"P(≥1 {a} ∧ ≥1 {b})"
-    st.markdown(f"""
-    <div class="kpi" style="max-width:260px"><div class="v">{sw(a)}{sw(b)}{p:.1%}</div>
-    <div class="l">{label}</div></div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="sec">Exposure before your next turn</div>', unsafe_allow_html=True)
+    def p_seen(K, refills):
+        """P(≥1 of the color among 3*refills tokens revealed while opponents act)."""
+        s = min(DRAW * refills, N)
+        return 1 - (comb(N - K, s) / comb(N, s) if N - K >= s else 0.0)
+    def heat_x(p):
+        t = min(p, 1.0)
+        shade = int(255 - t * 95)
+        return f"background:rgb({shade},{shade + int((255 - shade) * 0.4)},255)"
+    rows = []
+    for c in sorted(COLORS, key=lambda x: remaining[x], reverse=True):
+        K = remaining[c]
+        cells = [f"<td>{sw(c)}{c}</td>"]
+        for players in (2, 3, 4):
+            p = p_seen(K, players - 1)
+            cells.append(f"<td class='num' style='{heat_x(p)}'>{p:.0%}</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown("<table class='dense'><tr><th>Color</th><th>2p</th><th>3p</th>"
+                "<th>4p</th></tr>" + "".join(rows) + "</table>", unsafe_allow_html=True)
+    st.markdown('<div class="dash-sub">P(≥1 of the color enters the market during opponents\' '
+                'turns before you act again). High = snipeable / safe to wait for. '
+                'Low = take it now or plan without it.</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------- multi-turn projections
 st.markdown('<div class="sec" style="margin-top:14px">Multi-turn projections · n stones in m turns '
@@ -380,3 +392,66 @@ else:
     st.markdown(f'<div class="dash-sub">Cell = P({pre}col of {ca} AND {pre}row of {cb}) '
                 f'within {m_sel} turn{"s" if m_sel > 1 else ""} ({min(DRAW * m_sel, N)} tokens drawn). '
                 'Columns: ' + ca + ' · Rows: ' + cb + '.</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------------- estimation drill
+st.markdown('<div class="sec" style="margin-top:14px">Estimation drill · calibrate your gut</div>',
+            unsafe_allow_html=True)
+
+import random as _rnd
+
+def _new_question():
+    qtype = _rnd.choice(["one", "pair", "multi", "multi2"])
+    if qtype == "one":
+        c = _rnd.choice(COLORS)
+        return (f"P(≥1 {c} in the next refill of 3)?", 1 - p_none([c]))
+    if qtype == "pair":
+        a, b = _rnd.sample(COLORS, 2)
+        return (f"P(≥1 {a} AND ≥1 {b} in the next refill of 3)?",
+                1 - p_none([a]) - p_none([b]) + p_none([a, b]))
+    if qtype == "multi":
+        c = _rnd.choice(COLORS)
+        m = _rnd.randint(2, 5)
+        return (f"P(≥2 {c} within {m} turns)?", p_atleast_multi(remaining[c], 2, m))
+    c = _rnd.choice(COLORS)
+    m = _rnd.randint(3, 6)
+    n = _rnd.randint(3, 4)
+    return (f"P(≥{n} {c} within {m} turns)?", p_atleast_multi(remaining[c], n, m))
+
+if "drill_q" not in st.session_state:
+    st.session_state.drill_q, st.session_state.drill_a = _new_question()
+    st.session_state.drill_revealed = False
+    st.session_state.drill_hist = []
+
+dc1, dc2, dc3, dc4 = st.columns([3, 2, 1, 1])
+with dc1:
+    st.markdown(f'<div style="font-size:14px;padding-top:6px"><b>{st.session_state.drill_q}</b></div>',
+                unsafe_allow_html=True)
+with dc2:
+    guess = st.slider("Your estimate (%)", 0, 100, 50, 1, key="drill_guess",
+                      label_visibility="collapsed")
+with dc3:
+    if st.button("Reveal", use_container_width=True):
+        st.session_state.drill_revealed = True
+        st.session_state.drill_hist.append(
+            abs(guess / 100 - st.session_state.drill_a))
+with dc4:
+    if st.button("Next", use_container_width=True):
+        st.session_state.drill_q, st.session_state.drill_a = _new_question()
+        st.session_state.drill_revealed = False
+        st.rerun()
+
+if st.session_state.drill_revealed:
+    truth = st.session_state.drill_a
+    err = abs(guess / 100 - truth)
+    verdict = ("sharp" if err <= 0.05 else "close" if err <= 0.12 else "off")
+    vcls = {"sharp": "hot", "close": "", "off": "cold"}[verdict]
+    hist = st.session_state.drill_hist
+    avg = sum(hist) / len(hist)
+    st.markdown(
+        f'<div class="dash-sub">Answer: <b>{truth:.0%}</b> · you said {guess}% · '
+        f'error <span class="{vcls}"><b>{err:.0%} ({verdict})</b></span> · '
+        f'session avg error over {len(hist)} answer{"s" if len(hist) != 1 else ""}: '
+        f'<b>{avg:.0%}</b></div>', unsafe_allow_html=True)
+st.markdown('<div class="dash-sub">Questions use the current bag state from the sidebar. '
+            'Consistent ≤5% error means your table lookups can move to instinct.</div>',
+            unsafe_allow_html=True)
