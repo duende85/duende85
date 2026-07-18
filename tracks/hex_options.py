@@ -3,7 +3,9 @@
 
 STREAMLIT DASHBOARD (recommended):
     pip install streamlit mss
-    streamlit run tantrix_app.py
+    streamlit run tantrix_app.py        # normal way
+    python tantrix_app.py               # ALSO works (incl. Spyder runfile):
+                                        # starts the server + opens the browser
   Then use the sidebar: Scan screen (game must be visible), or upload a
   screenshot; enter forced-space combos like  RGB, YYB ; set the draw count
   for probabilities.
@@ -331,20 +333,22 @@ def analyze(img_arr, verbose=False):
         vfrac = vivid[box].sum() / area
         fill = area / (w * h)
         ncols = sum(1 for m in (is_r, is_y, is_g, is_b) if m[box].sum() > 0.01 * area)
-        # a Tantrix tile region: hexagon-ish fill, ~10-55% colored lines,
-        # at least 3 of the 4 line colors present
-        if not (0.50 < fill < 0.97 and 0.08 < vfrac < 0.60 and ncols >= 3):
+        # relaxed: any plausible tile region (sprawling boards can have low
+        # bbox fill); strict: unmistakably tile-shaped (used for sizing)
+        relaxed = 0.15 < fill < 0.97 and 0.08 < vfrac < 0.60 and ncols >= 3
+        strict = 0.55 < fill < 0.90 and 0.15 < vfrac < 0.45 and ncols >= 3
+        if not relaxed:
             continue
         comps.append({'ys': ys, 'xs': xs, 'x0': x0, 'x1': x1,
-                      'y0': y0, 'y1': y1, 'area': area})
+                      'y0': y0, 'y1': y1, 'area': area, 'strict': strict})
     if not comps:
         if verbose:
             print("!! no Tantrix tiles found in this frame")
         return None
 
-    # ---- estimate apothem: narrowest tile component = one tile wide
+    # ---- estimate apothem: narrowest STRICT tile component = one tile wide
     widths = sorted(c['x1'] - c['x0'] + 1 for c in comps
-                    if 30 < c['x1'] - c['x0'] < 320)
+                    if c['strict'] and 30 < c['x1'] - c['x0'] < 320)
     if not widths:
         if verbose:
             print("!! could not estimate tile size")
@@ -476,14 +480,15 @@ def streamlit_app():
     st.set_page_config(page_title='Tantrix bag', page_icon='⬡',
                        layout='wide', initial_sidebar_state='expanded')
     st.markdown("""<style>
-      .block-container{padding-top:1.2rem;padding-bottom:0.5rem}
-      div[data-testid="stMetric"]{background:#1c1f26;border-radius:8px;
-        padding:6px 10px}
-      .combo{font-family:monospace;font-size:0.95rem;margin:2px 0;
-        padding:3px 8px;border-radius:6px;background:#22252d}
-      .combo.hot{background:#463016;border:1px solid #c8862a}
-      .tiles{color:#9aa4b2;font-family:monospace;font-size:0.8rem}
-      .prob{float:right;color:#7fd4a0;font-weight:600}
+      .block-container{padding-top:1.1rem;padding-bottom:0.5rem;max-width:1200px}
+      div[data-testid="stMetric"]{background:#f4f6f8;border:1px solid #e3e7ec;
+        border-radius:10px;padding:6px 12px}
+      .combo{font-family:monospace;font-size:0.95rem;margin:3px 0;
+        padding:4px 10px;border-radius:8px;background:#f7f8fa;
+        border:1px solid #e6e9ee;color:#1f2937}
+      .combo.hot{background:#fff4dd;border:1.5px solid #e8a13c}
+      .tiles{color:#6b7480;font-family:monospace;font-size:0.78rem}
+      .prob{float:right;color:#1a7f4b;font-weight:600}
     </style>""", unsafe_allow_html=True)
 
     st.title('⬡ Tantrix bag tracker')
@@ -602,12 +607,36 @@ def run_screen_cli(wanted, debug=False):
         print("no Tantrix tiles found on any monitor — make sure the game "
               "window is visible (not minimized or covered).")
 
+def launch_dashboard():
+    """Start the Streamlit server on this very file and open the browser.
+    Lets Spyder users simply run the script with --app (or runfile)."""
+    import subprocess, webbrowser, time, os
+    if not _ensure('streamlit', 'streamlit', required=False):
+        sys.exit("the dashboard needs streamlit:  pip install streamlit")
+    path = os.path.abspath(__file__)
+    print("starting dashboard at http://localhost:8501  (Ctrl-C to stop)")
+    proc = subprocess.Popen([sys.executable, '-m', 'streamlit', 'run', path,
+                             '--server.headless', 'true'])
+    time.sleep(3)
+    try:
+        webbrowser.open('http://localhost:8501')
+    except Exception:
+        pass
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+
 if running_in_streamlit():
     streamlit_app()
 elif __name__ == '__main__':
     args = sys.argv[1:]
     if args and args[0] in ('-h', '--help'):
         print(__doc__)
+        sys.exit(0)
+    if '--app' in args or not args:
+        # default: open the dashboard (CLI scan still available via paths/flags)
+        launch_dashboard()
         sys.exit(0)
     wanted = []
     rest = []
@@ -622,7 +651,7 @@ elif __name__ == '__main__':
     if not _ensure('mss', 'mss', required=False) and not rest:
         sys.exit("screen grabbing needs 'mss' (pip install mss), or pass a "
                  "screenshot path.")
-    paths = [r for r in rest if r != '--debug']
+    paths = [r for r in rest if r not in ('--debug', '--scan')]
     if paths:
         run_image_cli(paths[0], wanted)
     else:
